@@ -197,6 +197,22 @@ export interface MarketDataRow {
   timestamp: string;
 }
 
+// ── Rule Config ──
+export interface RuleConfigItem {
+  id: number;
+  category: string;
+  key: string;
+  value: number;
+  label: string;
+  description: string;
+  data_type: string;
+  min_value: number | null;
+  max_value: number | null;
+  unit: string;
+  display_order: number;
+  updated_at: string;
+}
+
 // ── Accounts ──
 export interface Account {
   account_id: string;

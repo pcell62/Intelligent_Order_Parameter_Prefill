@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import init_db
-from routers import clients, instruments, orders, market_data, prefill, analytics, accounts
+from routers import clients, instruments, orders, market_data, prefill, analytics, accounts, rule_config
 from services.market_data_service import MarketDataService
 from services.execution_engine import ExecutionEngine
 
@@ -70,6 +70,7 @@ app.include_router(accounts.router, prefix="/api/accounts", tags=["Accounts"])
 app.include_router(prefill.router, prefix="/api/prefill", tags=["Prefill"])
 app.include_router(market_data.router, prefix="/api/market-data", tags=["Market Data"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
+app.include_router(rule_config.router, prefix="/api/rule-config", tags=["Rule Config"])
 
 
 @app.get("/api/health")

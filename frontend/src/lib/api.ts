@@ -13,6 +13,7 @@ import type {
   OrderHistory,
   MarketDataRow,
   Account,
+  RuleConfigItem,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
@@ -134,6 +135,21 @@ export const prefillApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+};
+
+// ── Rule Config ──
+export const ruleConfigApi = {
+  getAll: () => apiFetch<RuleConfigItem[]>("/rule-config"),
+  getCategories: () => apiFetch<string[]>("/rule-config/categories"),
+  getCategory: (category: string) =>
+    apiFetch<RuleConfigItem[]>(`/rule-config/category/${category}`),
+  updateMany: (updates: { key: string; value: number }[]) =>
+    apiFetch<{ updated: number; message: string }>("/rule-config", {
+      method: "PUT",
+      body: JSON.stringify({ updates }),
+    }),
+  resetToDefaults: () =>
+    apiFetch<{ message: string }>("/rule-config/reset", { method: "POST" }),
 };
 
 // ── Analytics ──

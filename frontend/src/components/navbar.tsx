@@ -7,6 +7,7 @@ import {
   Plus,
   Activity,
   Database,
+  Settings,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -31,6 +32,12 @@ export function Navbar({ onNewOrder }: NavbarProps) {
       </div>
 
       <div className="flex items-center gap-2">
+        <Link href="/settings">
+          <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
+            <Settings className="h-4 w-4 mr-1" />
+            Rule Config
+          </Button>
+        </Link>
         <Link href="/analytics">
           <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
             <Database className="h-4 w-4 mr-1" />

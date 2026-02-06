@@ -11,6 +11,11 @@ Key capabilities:
   7. Scenario detection  (EOD Compliance, Stealth, Arrival Benchmark, …)
 
 Every suggestion includes an explanation string and a confidence score.
+
+ALL numeric thresholds are loaded from the rule_config database table via
+RuleConfig (aliased RC).  The second argument to every RC.get*() call is the
+fallback default — identical to the original hard-coded value — so the engine
+behaves exactly the same even if the DB table is empty.
 """
 
 import json
@@ -21,6 +26,7 @@ from collections import Counter
 from datetime import datetime, time as dtime, timedelta
 from typing import Any
 from database import get_db
+from services.rule_config_service import RuleConfig as RC
 
 MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
@@ -170,7 +176,7 @@ def _parse_order_notes(notes: str) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 3. Urgency score computation
+# 3. Urgency score computation  (ALL thresholds from RC)
 # ──────────────────────────────────────────────────────────────────────
 
 def _compute_urgency_score(
@@ -185,55 +191,55 @@ def _compute_urgency_score(
     Compute an urgency score from 0 (patient) to 100 (urgent).
     This is the "turn the knob" base value.
     """
-    score = 50  # baseline
+    score = RC.get_int("urgency.baseline", 50)
 
     # ── Time pressure ──
-    if time_to_close < 10:
-        score += 35
-    elif time_to_close < 20:
-        score += 25
-    elif time_to_close < 30:
-        score += 18
-    elif time_to_close < 60:
-        score += 10
-    elif time_to_close > 240:
-        score -= 10
+    if time_to_close < RC.get_int("urgency.time_close_critical_min", 10):
+        score += RC.get_int("urgency.time_close_critical_delta", 35)
+    elif time_to_close < RC.get_int("urgency.time_close_tight_min", 20):
+        score += RC.get_int("urgency.time_close_tight_delta", 25)
+    elif time_to_close < RC.get_int("urgency.time_close_approaching_min", 30):
+        score += RC.get_int("urgency.time_close_approaching_delta", 18)
+    elif time_to_close < RC.get_int("urgency.time_close_mild_min", 60):
+        score += RC.get_int("urgency.time_close_mild_delta", 10)
+    elif time_to_close > RC.get_int("urgency.time_open_plenty_min", 240):
+        score += RC.get_int("urgency.time_open_plenty_delta", -10)
 
     # ── Client profile ──
     if tag == "eod_compliance":
-        score += 12
+        score += RC.get_int("urgency.tag_eod_compliance", 12)
     elif tag == "hft":
-        score += 18
+        score += RC.get_int("urgency.tag_hft", 18)
     elif tag == "stealth":
-        score -= 12
+        score += RC.get_int("urgency.tag_stealth", -12)
     elif tag == "conservative":
-        score -= 15
+        score += RC.get_int("urgency.tag_conservative", -15)
     elif tag == "arrival_price":
-        score += 5
+        score += RC.get_int("urgency.tag_arrival_price", 5)
 
     # ── Order size ── (larger orders need patience)
     if size_pct_adv > 20:
-        score -= 12
+        score += RC.get_int("urgency.size_above_20pct_delta", -12)
     elif size_pct_adv > 10:
-        score -= 5
+        score += RC.get_int("urgency.size_above_10pct_delta", -5)
     elif size_pct_adv < 2:
-        score += 10
+        score += RC.get_int("urgency.size_below_2pct_delta", 10)
     elif size_pct_adv < 5:
-        score += 5
+        score += RC.get_int("urgency.size_below_5pct_delta", 5)
 
     # ── Volatility ── (high vol → more careful)
-    if volatility > 3.0:
-        score -= 8
-    elif volatility < 1.5:
-        score += 5
+    if volatility > RC.get_float("urgency.vol_high_threshold", 3.0):
+        score += RC.get_int("urgency.vol_high_delta", -8)
+    elif volatility < RC.get_float("urgency.vol_low_threshold", 1.5):
+        score += RC.get_int("urgency.vol_low_delta", 5)
 
     # ── Notes intent ──
     if notes_intent.get("urgency_hint") == "high":
-        score += 20
+        score += RC.get_int("urgency.notes_high_delta", 20)
     elif notes_intent.get("urgency_hint") == "low":
-        score -= 15
+        score += RC.get_int("urgency.notes_low_delta", -15)
     if notes_intent.get("get_done"):
-        score += 12
+        score += RC.get_int("urgency.notes_get_done_delta", 12)
     if notes_intent.get("deadline"):
         # If deadline is soon, add urgency
         try:
@@ -242,16 +248,16 @@ def _compute_urgency_score(
             now = datetime.now()
             now_min = now.hour * 60 + now.minute
             mins_until = dl_min - now_min
-            if 0 < mins_until < 30:
-                score += 20
-            elif 0 < mins_until < 60:
-                score += 10
+            if 0 < mins_until < RC.get_int("urgency.deadline_imminent_min", 30):
+                score += RC.get_int("urgency.deadline_imminent_delta", 20)
+            elif 0 < mins_until < RC.get_int("urgency.deadline_approaching_min", 60):
+                score += RC.get_int("urgency.deadline_approaching_delta", 10)
         except (ValueError, IndexError):
             pass
 
     # ── Risk aversion (light influence) ──
     # 0=aggressive → push up, 100=conservative → push down
-    risk_delta = (50 - risk_aversion) * 0.15
+    risk_delta = (50 - risk_aversion) * RC.get_float("urgency.risk_aversion_factor", 0.15)
     score += int(risk_delta)
 
     return max(0, min(100, int(score)))
@@ -262,9 +268,10 @@ def _compute_urgency_score(
 # ──────────────────────────────────────────────────────────────────────
 
 def _get_historical_pattern(client_id: str, symbol: str) -> dict:
-    """Query the last 10 orders for this client–symbol pair and compute
+    """Query the last N orders for this client–symbol pair and compute
     statistical summaries for blending with rule-based suggestions."""
     db = get_db()
+    query_limit = RC.get_int("historical.query_limit", 10)
     try:
         rows = db.execute("""
             SELECT o.algo_type, o.order_type, o.direction, o.quantity,
@@ -273,8 +280,8 @@ def _get_historical_pattern(client_id: str, symbol: str) -> dict:
             FROM orders o
             WHERE o.client_id = ? AND o.symbol = ?
             ORDER BY o.created_at DESC
-            LIMIT 10
-        """, (client_id, symbol)).fetchall()
+            LIMIT ?
+        """, (client_id, symbol, query_limit)).fetchall()
 
         if not rows:
             return {}
@@ -387,8 +394,8 @@ def _get_cross_client_patterns(symbol: str, quantity: int) -> dict:
     """Analyze what all clients do for similar-sized orders on this symbol."""
     db = get_db()
     try:
-        qty_low = max(1, int(quantity * 0.4))
-        qty_high = int(quantity * 2.5)
+        qty_low = max(1, int(quantity * RC.get_float("cross_client.qty_low_factor", 0.4)))
+        qty_high = int(quantity * RC.get_float("cross_client.qty_high_factor", 2.5))
         rows = db.execute("""
             SELECT algo_type, COUNT(*) as cnt, AVG(urgency) as avg_urg
             FROM orders
@@ -422,15 +429,15 @@ def _get_cross_client_patterns(symbol: str, quantity: int) -> dict:
 
 def _detect_scenario(tag, urgency, time_to_close, size_pct_adv, notes_intent, get_done_likely) -> tuple[str, str]:
     """Detect the best-matching execution scenario."""
-    if tag == "eod_compliance" or (get_done_likely and time_to_close < 90):
+    if tag == "eod_compliance" or (get_done_likely and time_to_close < RC.get_int("scenario.eod_time_threshold", 90)):
         return "eod_compliance", "EOD Compliance Execution"
-    if tag == "stealth" or (size_pct_adv > 20 and urgency < 40):
+    if tag == "stealth" or (size_pct_adv > RC.get_float("scenario.stealth_size", 20) and urgency < RC.get_int("scenario.stealth_urgency_max", 40)):
         return "stealth_execution", "Stealth / Minimal Impact"
     if tag == "arrival_price" or notes_intent.get("benchmark") == "arrival":
         return "arrival_benchmark", "Arrival Price Benchmark"
-    if urgency > 80 or time_to_close < 15:
+    if urgency > RC.get_int("scenario.speed_urgency_min", 80) or time_to_close < RC.get_int("scenario.speed_time", 15):
         return "speed_priority", "Speed Priority"
-    if urgency < 25 and time_to_close > 120:
+    if urgency < RC.get_int("scenario.patient_urgency_max", 25) and time_to_close > RC.get_int("scenario.patient_time_min", 120):
         return "patient_accumulation", "Patient Accumulation"
     return "standard", "Standard Execution"
 
@@ -590,7 +597,11 @@ def compute_prefill(
     # ── Historical patterns ──
     history = _get_historical_pattern(client_id, symbol)
     hist_count = history.get("order_count", 0)
-    hist_weight = min(0.30, max(0.0, (hist_count - 2) * 0.10)) if hist_count >= 3 else 0.0
+
+    _min_start = RC.get_int("historical.min_orders_start", 3)
+    _max_wt = RC.get_float("historical.max_weight", 0.30)
+    _wt_step = RC.get_float("historical.weight_per_order", 0.10)
+    hist_weight = min(_max_wt, max(0.0, (hist_count - (_min_start - 1)) * _wt_step)) if hist_count >= _min_start else 0.0
     rule_weight = 1.0 - hist_weight
 
     # ── Size metrics ──
@@ -607,11 +618,13 @@ def compute_prefill(
     urgency = urgency_override if urgency_override is not None else computed_urgency
 
     # ── Get-done inference ──
+    _gd_thresh = RC.get_int("get_done.urgency_threshold", 75)
+    _gd_freq = RC.get_float("historical.get_done_freq", 0.50)
     get_done_likely = (
         notes_intent.get("get_done", False)
         or tag == "eod_compliance"
-        or urgency >= 75
-        or (hist_count >= 3 and history.get("get_done_freq", 0) > 0.5)
+        or urgency >= _gd_thresh
+        or (hist_count >= _min_start and history.get("get_done_freq", 0) > _gd_freq)
     )
 
     # ── Scenario ──
@@ -630,12 +643,19 @@ def compute_prefill(
     algo_reason = ""
     algo_conf = 0.5
 
+    # Configurable thresholds for algo selection
+    _direct_urg = RC.get_int("algo.direct_urgency_threshold", 85)
+    _direct_sz = RC.get_float("algo.direct_size_max", 5)
+    _high_urg = RC.get_int("algo.high_urgency_threshold", 75)
+    _low_urg = RC.get_int("algo.low_urgency_threshold", 25)
+    _hft_sz = RC.get_float("algo.hft_small_size", 2)
+
     # If notes explicitly request an algo, honour it
     if notes_intent.get("algo_hint"):
         algo_type = notes_intent["algo_hint"]
         algo_reason = f"Order notes explicitly request {algo_type}"
         algo_conf = 0.95
-    elif urgency >= 85 and size_pct_adv < 5:
+    elif urgency >= _direct_urg and size_pct_adv < _direct_sz:
         algo_type = "NONE"
         algo_reason = (
             f"Very high urgency ({urgency}/100) with small order ({size_pct_adv:.1f}% ADV) "
@@ -657,18 +677,20 @@ def compute_prefill(
         algo_type = "POV"
         algo_reason = "Client benchmarks against arrival price — POV provides controlled participation to minimise slippage"
         algo_conf = 0.85
-    elif tag == "hft" and size_pct_adv < 2:
+    elif tag == "hft" and size_pct_adv < _hft_sz:
         algo_type = "NONE"
         algo_reason = f"Small order ({size_pct_adv:.1f}% ADV) for HF client — direct execution for speed"
         algo_conf = 0.8
     else:
         # ── Urgency-driven algo selection ──
-        if urgency >= 75:
-            if size_pct_adv > 10:
+        if urgency >= _high_urg:
+            _hl = RC.get_float("algo.high_urgency_large_size", 10)
+            _hm = RC.get_float("algo.high_urgency_mid_size", 3)
+            if size_pct_adv > _hl:
                 algo_type = "POV"
                 algo_reason = f"High urgency ({urgency}/100) with significant size ({size_pct_adv:.1f}% ADV) — POV for fast controlled participation"
                 algo_conf = 0.75
-            elif size_pct_adv > 3:
+            elif size_pct_adv > _hm:
                 algo_type = "POV"
                 algo_reason = f"High urgency ({urgency}/100) — POV provides speed while managing impact"
                 algo_conf = 0.7
@@ -676,12 +698,14 @@ def compute_prefill(
                 algo_type = "NONE"
                 algo_reason = f"High urgency ({urgency}/100) with small order — direct execution"
                 algo_conf = 0.75
-        elif urgency <= 25:
-            if size_pct_adv > 15:
+        elif urgency <= _low_urg:
+            _ll = RC.get_float("algo.low_urgency_large_size", 15)
+            _lm = RC.get_float("algo.low_urgency_mid_size", 5)
+            if size_pct_adv > _ll:
                 algo_type = "ICEBERG"
                 algo_reason = f"Low urgency ({urgency}/100) + large order ({size_pct_adv:.1f}% ADV) — ICEBERG for patient stealth accumulation"
                 algo_conf = 0.75
-            elif size_pct_adv > 5:
+            elif size_pct_adv > _lm:
                 algo_type = "VWAP"
                 algo_reason = f"Low urgency ({urgency}/100) — VWAP for patient volume-weighted distribution"
                 algo_conf = 0.7
@@ -691,15 +715,18 @@ def compute_prefill(
                 algo_conf = 0.65
         else:
             # Medium urgency — size-driven
-            if size_pct_adv > 20:
+            _mvl = RC.get_float("algo.med_very_large_size", 20)
+            _ml = RC.get_float("algo.med_large_size", 10)
+            _mm = RC.get_float("algo.med_mid_size", 3)
+            if size_pct_adv > _mvl:
                 algo_type = "ICEBERG"
                 algo_reason = f"Large order ({size_pct_adv:.1f}% ADV) — ICEBERG hides size to reduce impact"
                 algo_conf = 0.75
-            elif size_pct_adv > 10:
+            elif size_pct_adv > _ml:
                 algo_type = "VWAP"
                 algo_reason = f"Significant order ({size_pct_adv:.1f}% ADV) — VWAP distributes evenly"
                 algo_conf = 0.7
-            elif size_pct_adv > 3:
+            elif size_pct_adv > _mm:
                 algo_type = "POV"
                 algo_reason = f"Mid-size order ({size_pct_adv:.1f}% ADV) — POV balances speed and impact"
                 algo_conf = 0.6
@@ -709,6 +736,7 @@ def compute_prefill(
                 algo_conf = 0.65
 
     # ── Blend with historical ──
+    _sim_thresh = RC.get_float("historical.similarity_threshold", 0.20)
     if hist_weight > 0 and history.get("preferred_algo") and not notes_intent.get("algo_hint"):
         hist_algo = history["preferred_algo"]
         if hist_algo != algo_type:
@@ -717,7 +745,7 @@ def compute_prefill(
             if avg_hist_vol > 0 and volatility > 0:
                 condition_similarity = min(volatility, avg_hist_vol) / max(volatility, avg_hist_vol)
             effective_hist = hist_weight * condition_similarity
-            if effective_hist >= 0.20:
+            if effective_hist >= _sim_thresh:
                 rule_algo = algo_type
                 algo_type = hist_algo
                 algo_reason = (
@@ -731,10 +759,12 @@ def compute_prefill(
                 algo_conf = min(0.95, algo_conf + hist_weight * 0.1)
 
     # ── Cross-client signal (light influence) ──
-    if cross and cross.get("most_common_algo") and cross["total_similar"] >= 5:
+    _cc_min = RC.get_int("cross_client.min_orders", 5)
+    _cc_pct = RC.get_int("cross_client.min_pct", 60)
+    if cross and cross.get("most_common_algo") and cross["total_similar"] >= _cc_min:
         cross_algo = cross["most_common_algo"]
         cross_pct = cross["algo_distribution"].get(cross_algo, {}).get("pct", 0)
-        if cross_algo != algo_type and cross_pct >= 60:
+        if cross_algo != algo_type and cross_pct >= _cc_pct:
             algo_reason += (
                 f". Market pattern: {cross_pct}% of similar-sized {symbol} orders "
                 f"across all clients use {cross_algo}"
@@ -747,19 +777,23 @@ def compute_prefill(
     # ─────────────────────────────────────────────────
     # 2. ORDER TYPE
     # ─────────────────────────────────────────────────
+    _ot_urg = RC.get_int("order_type.market_urgency", 85)
+    _ot_tc = RC.get_int("order_type.market_time_close", 15)
+    _ot_vol = RC.get_float("order_type.limit_volatility", 3.0)
+
     if algo_type != "NONE":
         suggestions["order_type"] = "LIMIT"
         explanations["order_type"] = "LIMIT order recommended with algo execution — provides price protection while algo manages timing"
         confidence["order_type"] = 0.8
-    elif urgency >= 85:
+    elif urgency >= _ot_urg:
         suggestions["order_type"] = "MARKET"
         explanations["order_type"] = f"Urgency {urgency}/100 — MARKET order for guaranteed immediate fill"
         confidence["order_type"] = 0.85
-    elif time_to_close < 15:
+    elif time_to_close < _ot_tc:
         suggestions["order_type"] = "MARKET"
         explanations["order_type"] = f"Only {time_to_close}min to close — MARKET order for guaranteed fill before session ends"
         confidence["order_type"] = 0.85
-    elif volatility > 3.0:
+    elif volatility > _ot_vol:
         suggestions["order_type"] = "LIMIT"
         explanations["order_type"] = f"High volatility ({volatility:.1f}%) — LIMIT order to avoid adverse fills"
         confidence["order_type"] = 0.75
@@ -769,9 +803,10 @@ def compute_prefill(
         confidence["order_type"] = 0.6
 
     # Blend with historical
+    _min_ot = RC.get_int("historical.min_orders_order_type", 5)
     if hist_weight > 0 and history.get("preferred_order_type"):
         hist_ot = history["preferred_order_type"]
-        if hist_ot != suggestions["order_type"] and hist_count >= 5:
+        if hist_ot != suggestions["order_type"] and hist_count >= _min_ot:
             rule_ot = suggestions["order_type"]
             suggestions["order_type"] = hist_ot
             explanations["order_type"] = (
@@ -784,17 +819,21 @@ def compute_prefill(
     # 3. LIMIT PRICE
     # ─────────────────────────────────────────────────
     if suggestions["order_type"] == "LIMIT" and ltp > 0:
-        # Offset based on urgency
-        if urgency >= 75:
-            offset_bps = 18
-        elif urgency >= 50:
-            offset_bps = 12
-        elif time_to_close < 30:
-            offset_bps = 15
-        elif volatility > 2.5:
-            offset_bps = 12
+        _lp_hu = RC.get_int("limit_price.high_urgency_threshold", 75)
+        _lp_mu = RC.get_int("limit_price.med_urgency_threshold", 50)
+        _lp_tc = RC.get_int("limit_price.time_close_threshold", 30)
+        _lp_vt = RC.get_float("limit_price.vol_threshold", 2.5)
+
+        if urgency >= _lp_hu:
+            offset_bps = RC.get_int("limit_price.high_urgency_offset", 18)
+        elif urgency >= _lp_mu:
+            offset_bps = RC.get_int("limit_price.med_urgency_offset", 12)
+        elif time_to_close < _lp_tc:
+            offset_bps = RC.get_int("limit_price.time_close_offset", 15)
+        elif volatility > _lp_vt:
+            offset_bps = RC.get_int("limit_price.vol_offset", 12)
         else:
-            offset_bps = 8
+            offset_bps = RC.get_int("limit_price.default_offset", 8)
 
         if direction == "BUY":
             limit_price = _round_to_tick(ltp * (1 + offset_bps / 10000), tick_size)
@@ -810,16 +849,19 @@ def compute_prefill(
     # 4. TIF (Time In Force)
     # ─────────────────────────────────────────────────
     if algo_type == "NONE":
-        # Direct orders — TIF varies more aggressively with urgency
-        if urgency >= 90:
+        _ioc_ext = RC.get_int("tif.direct_ioc_extreme", 90)
+        _fok = RC.get_int("tif.direct_fok", 80)
+        _ioc_hi = RC.get_int("tif.direct_ioc_high", 65)
+
+        if urgency >= _ioc_ext:
             suggestions["tif"] = "IOC"
             explanations["tif"] = f"Extreme urgency ({urgency}/100) with direct execution — IOC ensures immediate fill or cancel"
             confidence["tif"] = 0.85
-        elif urgency >= 80:
+        elif urgency >= _fok:
             suggestions["tif"] = "FOK"
             explanations["tif"] = f"Very high urgency ({urgency}/100) — FOK (Fill or Kill) for all-or-nothing immediate execution"
             confidence["tif"] = 0.8
-        elif urgency >= 65:
+        elif urgency >= _ioc_hi:
             suggestions["tif"] = "IOC"
             explanations["tif"] = f"High urgency ({urgency}/100) direct order — IOC to fill what's available immediately"
             confidence["tif"] = 0.7
@@ -828,17 +870,19 @@ def compute_prefill(
             explanations["tif"] = "Good For Day — standard TIF for intraday direct orders"
             confidence["tif"] = 0.8
     else:
-        # Algo orders — TIF still varies but algos manage their own timing
-        if urgency >= 85 and get_done_likely:
+        _gfd_hi = RC.get_int("tif.algo_gfd_high", 85)
+        _gfd_mod = RC.get_int("tif.algo_gfd_moderate", 70)
+        _gtc_time = RC.get_int("tif.algo_gtc_time", 375)
+
+        if urgency >= _gfd_hi and get_done_likely:
             suggestions["tif"] = "GFD"
             explanations["tif"] = f"GFD with Get Done — algo manages timing within the day, urgency {urgency}/100 handled via aggression"
             confidence["tif"] = 0.85
-        elif urgency >= 70:
+        elif urgency >= _gfd_mod:
             suggestions["tif"] = "GFD"
             explanations["tif"] = f"GFD — algo execution with high urgency ({urgency}/100) managed through aggression and time window"
             confidence["tif"] = 0.8
-        elif time_to_close > 375:
-            # Full day ahead — GTC could make sense
+        elif time_to_close > _gtc_time:
             suggestions["tif"] = "GTC"
             explanations["tif"] = "Full session ahead with low urgency — GTC allows carry-over if not fully filled today"
             confidence["tif"] = 0.6
@@ -848,9 +892,10 @@ def compute_prefill(
             confidence["tif"] = 0.75
 
     # Blend with historical TIF preference
+    _min_tif = RC.get_int("historical.min_orders_tif", 3)
     if hist_weight > 0 and history.get("preferred_tif"):
         hist_tif = history["preferred_tif"]
-        if hist_tif != suggestions["tif"] and hist_count >= 3:
+        if hist_tif != suggestions["tif"] and hist_count >= _min_tif:
             rule_tif = suggestions["tif"]
             suggestions["tif"] = hist_tif
             explanations["tif"] = (
@@ -877,7 +922,7 @@ def compute_prefill(
             reasons.append("EOD compliance client")
         if notes_intent.get("get_done"):
             reasons.append("order notes indicate must-complete")
-        if urgency >= 75:
+        if urgency >= _gd_thresh:
             reasons.append(f"high urgency ({urgency}/100)")
         if not reasons:
             reasons.append("historical pattern shows frequent get-done usage")
@@ -914,23 +959,26 @@ def compute_prefill(
             except (ValueError, IndexError):
                 pass
 
+        _tw_close = RC.get_int("time_window.close_threshold", 60)
         if end_time is None:
             if tag == "eod_compliance" or get_done_likely:
                 end_time = market_close_dt
                 time_reason = f"Window runs to market close ({_format_time(MARKET_CLOSE)}) — {'EOD compliance' if tag == 'eod_compliance' else 'get-done'} mode"
-            elif time_to_close < 60:
+            elif time_to_close < _tw_close:
                 end_time = market_close_dt
-                time_reason = f"Less than 1hr to close — window extends to {_format_time(MARKET_CLOSE)}"
+                time_reason = f"Less than {_tw_close}min to close — window extends to {_format_time(MARKET_CLOSE)}"
             else:
                 remaining_min = (market_close_dt - start_time).total_seconds() / 60
-                # Urgency maps to window fraction
-                if urgency >= 70:
-                    frac = 0.35
-                elif urgency >= 50:
-                    frac = 0.55
+                _tw_hu = RC.get_int("time_window.high_urgency_threshold", 70)
+                _tw_mu = RC.get_int("time_window.med_urgency_threshold", 50)
+                if urgency >= _tw_hu:
+                    frac = RC.get_float("time_window.high_urgency_fraction", 0.35)
+                elif urgency >= _tw_mu:
+                    frac = RC.get_float("time_window.med_urgency_fraction", 0.55)
                 else:
-                    frac = 0.75
-                window_min = max(20, int(remaining_min * frac))
+                    frac = RC.get_float("time_window.low_urgency_fraction", 0.75)
+                _min_win = RC.get_int("time_window.min_window_min", 20)
+                window_min = max(_min_win, int(remaining_min * frac))
                 end_time = start_time + timedelta(minutes=window_min)
                 if end_time > market_close_dt:
                     end_time = market_close_dt
@@ -949,10 +997,13 @@ def compute_prefill(
     # 7. AGGRESSION LEVEL (urgency-driven)
     # ─────────────────────────────────────────────────
     if algo_type != "NONE":
-        if urgency >= 70:
+        _ag_hi = RC.get_int("aggression.high_threshold", 70)
+        _ag_med = RC.get_int("aggression.med_threshold", 35)
+
+        if urgency >= _ag_hi:
             agg = "High"
             agg_reason = f"High urgency ({urgency}/100) → aggressive execution to ensure timely completion"
-        elif urgency >= 35:
+        elif urgency >= _ag_med:
             agg = "Medium"
             agg_reason = f"Moderate urgency ({urgency}/100) → balanced approach between speed and impact"
         else:
@@ -960,16 +1011,21 @@ def compute_prefill(
             agg_reason = f"Low urgency ({urgency}/100) → passive execution to minimize market footprint"
 
         # Risk aversion override
-        if risk_aversion >= 70 and urgency < 70:
+        _cons_risk = RC.get_int("aggression.conservative_risk", 70)
+        _aggr_risk = RC.get_int("aggression.aggressive_risk", 29)
+        _aggr_floor = RC.get_int("aggression.aggressive_urgency_floor", 30)
+
+        if risk_aversion >= _cons_risk and urgency < _ag_hi:
             agg = "Low"
             agg_reason = f"Client risk aversion {risk_aversion}/100 overrides to Low aggression (urgency {urgency}/100)"
-        elif risk_aversion <= 29 and urgency >= 30:
+        elif risk_aversion <= _aggr_risk and urgency >= _aggr_floor:
             if agg != "High":
                 agg = "High"
                 agg_reason = f"Client risk aversion {risk_aversion}/100 pushes to High aggression (urgency {urgency}/100)"
 
         # Blend with historical
-        if hist_weight > 0 and history.get("avg_aggression") and hist_count >= 5:
+        _min_agg = RC.get_int("aggression.min_orders_blend", 5)
+        if hist_weight > 0 and history.get("avg_aggression") and hist_count >= _min_agg:
             hist_agg = history["avg_aggression"]
             if hist_agg != agg:
                 agg = hist_agg
@@ -984,17 +1040,22 @@ def compute_prefill(
     # ─────────────────────────────────────────────────
 
     if algo_type == "POV":
-        # Participation rate driven by urgency + size
-        if urgency >= 75:
-            pct = 20 if size_pct_adv < 10 else 15
-        elif urgency >= 50:
-            pct = 12 if size_pct_adv < 10 else 10
-        elif size_pct_adv > 15:
-            pct = 5
-        elif time_to_close < 60:
-            pct = 18
+        _pov_hu = RC.get_int("pov.high_urgency_threshold", 75)
+        _pov_mu = RC.get_int("pov.med_urgency_threshold", 50)
+        _pov_split = RC.get_float("pov.size_split_threshold", 10)
+        _pov_vl = RC.get_float("pov.very_large_threshold", 15)
+        _pov_tc = RC.get_int("pov.time_close_threshold", 60)
+
+        if urgency >= _pov_hu:
+            pct = RC.get_int("pov.rate_high_small", 20) if size_pct_adv < _pov_split else RC.get_int("pov.rate_high_large", 15)
+        elif urgency >= _pov_mu:
+            pct = RC.get_int("pov.rate_med_small", 12) if size_pct_adv < _pov_split else RC.get_int("pov.rate_med_large", 10)
+        elif size_pct_adv > _pov_vl:
+            pct = RC.get_int("pov.rate_very_large", 5)
+        elif time_to_close < _pov_tc:
+            pct = RC.get_int("pov.rate_near_close", 18)
         else:
-            pct = 10
+            pct = RC.get_int("pov.rate_default", 10)
 
         suggestions["target_participation_rate"] = str(pct)
         explanations["target_participation_rate"] = (
@@ -1003,23 +1064,31 @@ def compute_prefill(
         )
         confidence["target_participation_rate"] = 0.7
 
-        min_size = max(50, int(avg_trade_size * 0.3))
-        max_size = max(min_size * 10, int(avg_trade_size * 3))
+        _min_mult = RC.get_float("pov.min_size_multiplier", 0.3)
+        _min_floor = RC.get_int("pov.min_size_floor", 50)
+        _max_mult = RC.get_float("pov.max_size_multiplier", 3.0)
+        _max_ratio = RC.get_int("pov.max_size_min_ratio", 10)
+
+        min_size = max(_min_floor, int(avg_trade_size * _min_mult))
+        max_size = max(min_size * _max_ratio, int(avg_trade_size * _max_mult))
         suggestions["min_order_size"] = str(min_size)
         suggestions["max_order_size"] = str(max_size)
-        explanations["min_order_size"] = f"~30% of avg trade size ({avg_trade_size:.0f}) to avoid odd lots"
-        explanations["max_order_size"] = f"~3x avg trade size ({avg_trade_size:.0f}) to stay within normal flow"
+        explanations["min_order_size"] = f"~{int(_min_mult*100)}% of avg trade size ({avg_trade_size:.0f}) to avoid odd lots"
+        explanations["max_order_size"] = f"~{_max_mult:.0f}x avg trade size ({avg_trade_size:.0f}) to stay within normal flow"
         confidence["min_order_size"] = 0.6
         confidence["max_order_size"] = 0.6
 
     elif algo_type == "VWAP":
-        if urgency >= 65:
+        _vwap_urg = RC.get_int("vwap.front_load_urgency", 65)
+        _vwap_tc = RC.get_int("vwap.front_load_time", 90)
+
+        if urgency >= _vwap_urg:
             curve = "Front-loaded"
             curve_reason = f"High urgency ({urgency}/100) — front-loaded to fill majority early"
         elif tag == "eod_compliance":
             curve = "Back-loaded"
             curve_reason = "EOD compliance — back-loaded curve concentrates volume toward close"
-        elif time_to_close < 90:
+        elif time_to_close < _vwap_tc:
             curve = "Front-loaded"
             curve_reason = f"Limited time ({time_to_close}min) — front-loaded to ensure completion"
         else:
@@ -1030,16 +1099,27 @@ def compute_prefill(
         explanations["volume_curve"] = curve_reason
         confidence["volume_curve"] = 0.75
 
-        max_vol = 25 if size_pct_adv > 10 else 15 if size_pct_adv > 5 else 20
+        _vl_th = RC.get_float("vwap.size_large_threshold", 10)
+        _vm_th = RC.get_float("vwap.size_medium_threshold", 5)
+        if size_pct_adv > _vl_th:
+            max_vol = RC.get_int("vwap.max_vol_large", 25)
+        elif size_pct_adv > _vm_th:
+            max_vol = RC.get_int("vwap.max_vol_medium", 15)
+        else:
+            max_vol = RC.get_int("vwap.max_vol_small", 20)
         suggestions["max_volume_pct"] = str(max_vol)
         explanations["max_volume_pct"] = f"Cap at {max_vol}% per interval — limits single-period market participation"
         confidence["max_volume_pct"] = 0.65
 
     elif algo_type == "ICEBERG":
-        display_by_pct = max(100, int(qty * 0.08))
-        display_by_avg = max(100, int(avg_trade_size * 1.5))
+        _ice_pct = RC.get_float("iceberg.display_pct", 0.08)
+        _ice_mult = RC.get_float("iceberg.avg_trade_multiplier", 1.5)
+        _ice_min = RC.get_int("iceberg.min_display", 100)
+
+        display_by_pct = max(_ice_min, int(qty * _ice_pct))
+        display_by_avg = max(_ice_min, int(avg_trade_size * _ice_mult))
         display_qty = min(display_by_pct, display_by_avg)
-        display_qty = max(display_qty, 100)
+        display_qty = max(display_qty, _ice_min)
 
         suggestions["display_quantity"] = str(display_qty)
         explanations["display_quantity"] = (
