@@ -1,0 +1,127 @@
+1. Primary Order Details
+
+These are the core fields required to define what is being bought or sold.
+
+    Category: (e.g., "Client")
+
+    Side: The direction of the trade (e.g., "Buy")
+
+    Quantity: The amount of shares/contracts to trade (e.g., "1,000")
+
+    Symbol: The ticker symbol of the asset (e.g., "RELIANCE.NS")
+
+    Order Type: The method of price execution (e.g., "Limit")
+
+    Limit Price: The specific price for limit orders (e.g., "1448.4")
+
+    Price Type: A mandatory field indicating the pricing behavior (e.g., "Limit"). Note: This is highlighted in red in the first two images as missing.
+
+    Price Type Qual: Qualifier for the price type.
+
+    Display Qty: Quantity to be shown to the market (iceberg orders).
+
+2. Client & Account Information
+
+Fields used to identify who the trade is for and the capacity in which it is being traded.
+
+    Client: The name or code of the client (e.g., "UNKNOWN")
+
+    Account: The specific trading account.
+
+    Capacity: The regulatory capacity (e.g., "Principal").
+
+    Exchange Account: Specific account identifier for the exchange.
+
+    CIAN Code: Client Identifier for specific markets.
+
+    Client ID: Specific ID for the client.
+
+    BCAN Code: Broker Client Account Number (often used for regulatory reporting).
+
+3. Time & Validity
+
+Fields determining how long the order remains active.
+
+    TIF: Time In Force (e.g., "GFD" - Good For Day).
+
+    Expiry Date: Date when the order expires.
+
+    Time: Specific time for expiry.
+
+    Trading Period: Specific session (e.g., Pre-open, Continuous).
+
+    Hold: Boolean to hold the order before releasing (Yes/No).
+
+    Release Date & Time: When a held order should be sent to market.
+
+4. Execution Strategy (Algo/BlueBox)
+
+These fields appear when an algorithmic strategy (like "BlueBox 2" with "VWAP") is selected.
+
+    Service: The routing or algo service (e.g., "BlueBox 2", "Market").
+
+    Executor: The specific algorithm strategy (e.g., "VWAP").
+
+    SOR: Smart Order Router settings.
+
+Algo-Specific Parameters (Visible in Images 1 & 2):
+
+    Start Time / End Time: Window for the algorithm to run.
+
+    Pricing: Strategy for pricing (e.g., "Adaptive").
+
+    Layering: Strategy for layering orders (e.g., "Auto").
+
+    Max % of Volume: Participation rate limit.
+
+    Urgency: Aggressiveness of the algo (e.g., "Auto").
+
+    Execution Cycle (min): Time cycle for execution.
+
+    Get Done?: Boolean flag (True/False).
+
+Advanced Algo Sub-sections:
+
+    Slice Quantity:
+
+        Min Cross Qty
+
+        Max Cross Qty
+
+        Cross Qty Unit (e.g., "Shares")
+
+        Leave Active Slice
+
+    Auction:
+
+        Opening Print? (True/False)
+
+        Opening Print %
+
+        Closing Print? (True/False)
+
+        Closing Print %
+
+    IWould: (Likely "I Would" liquidity seeking logic)
+
+        IWould Price
+
+        IWould Qty
+
+        IWould Qty Unit
+
+    Adjust Limit:
+
+        Limit Option (e.g., "Order Limit")
+
+        Limit Off-set
+
+        Off-set Unit (e.g., "Tick")
+
+5. Miscellaneous / Notes
+
+    Order Notes: Free text field for internal notes.
+
+    Instructions: Special handling instructions.
+
+    Flags: System flags for the order.

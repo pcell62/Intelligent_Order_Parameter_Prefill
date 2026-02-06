@@ -1,0 +1,103 @@
+Sheet 1: Instructions & Overview
+
+Title: Intelligent Order Parameter Prefill - Schema Resource
+
+Purpose:
+This Excel file provides a starter schema for the Intelligent Order Parameter Prefill hackathon challenge. Use this as a foundation and extend it based on your solution approach.
+
+What You Should Do:
+
+    EXTEND this schema - add parameters you believe are valuable
+
+    IDENTIFY patterns through AI/ML, rules, or statistical methods
+
+    (optional) CREATE mock datasets that reflect realistic trading scenarios
+
+    DEVELOP profiling strategies to capture behavior and preferences
+
+    IDEATE what historical data would enable intelligent predictions
+
+Key Principles:
+
+    This schema is INTENTIONALLY MINIMAL - your value comes from enrichment
+
+    Think about contextual signals: market depth, news events, sector trends
+
+    Consider historical patterns
+
+    Focus on EXPLAINABILITY - traders need to understand recommendations
+
+    Balance automation with trader control and override capability
+
+Tabs in This File:
+
+    Instructions (this tab) - Overview and guidance
+
+    Market Data Schema - Real-time market parameters
+
+    Order Data Schema - Current order details
+
+    Algo Parameters Schema - Algorithm-specific configurations
+
+    Sample Mock Data - Example data structure for reference
+
+Sheet 2: Market Data Schema
+Parameter	Data Type	Description	Purpose / Usage
+Time to market close	Integer	Minutes remaining until market close	Critical for urgency assessment, EOD compliance decisions
+Qty	Integer	Last trade quantity (shares/units)	Recent trading activity indicator
+Bid	Float	Current best bid price	Buy-side liquidity, spread calculation
+Ask	Float	Current best ask price	Sell-side liquidity, spread calculation
+LTP (Last Traded Price)	Float	Most recent execution price	Current market price reference
+Volatility	Float (%)	Historical or intraday volatility measure across a defined time frame	Risk assessment, algo aggression tuning, slippage estimation
+Average Trade Size	Float	Mean trade size over recent period (e.g., last hour, last day)	Benchmark for order size, stealth trading strategy
+Sheet 3: Order Data Schema
+Parameter	Data Type	Description	Purpose / Usage
+Cpty (Counterparty)	String	Client or counterparty identifier	Key for client profiling, historical matching
+Size	Integer	Order size in shares/units	Relative to ADV determines market impact, algo choice
+Order type	Enum	Market, Limit, or other specialized types (Stoploss etc.)	Defines execution urgency and price constraints
+Algo Type	Enum	POV, VWAP, ICEBERG, or other execution algorithms	Determines execution strategy
+Start Time	Timestamp	Scheduled start time for algo execution	Timing constraint for execution window
+End Time	Timestamp	Target completion time for order	Deadline for execution, impacts urgency
+Order notes	Text	Free-text notes or special instructions from client	Captures client intent, special requirements, compliance notes
+Direction	Enum	Buy or Sell	Determines market side, impacts strategy selection and aggression strategy
+Symbol	String	Instrument identifier (ticker, ISIN, or exchange code)	Identifies specific stock for trading
+Limit Price	Float	Maximum buy price or minimum sell price threshold	Price constraint for limit orders, determines how close it is to the market price
+Sheet 4: Algo Parameters Schema
+POV (Percentage of Volume)
+Parameter	Data Type	Description	Purpose / Usage
+Target participation rate (%)	Float	Percentage of market volume to target (e.g., 10% = participate in 10% of total volume)	Balances urgency vs stealth; higher = faster but more market impact
+Min/Max order size	Integer	Minimum and maximum clip size for individual child orders	Prevents too-small or too-large individual orders
+Aggression level	Enum/Float	Low/Medium/High or numeric scale (e.g., 1-10)	Controls how aggressively algo crosses spread or posts liquidity
+VWAP (Volume Weighted Average Price)
+Parameter	Data Type	Description	Purpose / Usage
+Volume curve distribution	Enum/String	Historical, Front-loaded, Back-loaded, Custom curve	Determines how order is distributed across time window relative to expected volume
+Max % of volume	Float	Maximum participation rate at any interval (e.g., 20%)	Caps market impact during low-volume periods
+Aggression level	Enum/Float	Low/Medium/High or numeric scale	Controls willingness to cross spread vs wait for passive fills
+ICEBERG
+Parameter	Data Type	Description	Purpose / Usage
+Display quantity	Integer	Visible order size shown to market	Hides true order size to reduce information leakage and market impact
+Aggression level	Enum/Float	Low/Medium/High - controls refresh behavior and price improvement	Higher aggression = more frequent refreshes, tighter spreads
+Sheet 5: Sample Mock Data
+
+Market Data - Sample Records
+| Time to Close (min) | Qty | Bid | Ask | LTP | Volatility (%) | Avg Trade Size |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| 45 | 5000 | 152.3 | 152.35 | 152.33 | 2.1 | 7500 |
+| 180 | 3200 | 85.9 | 85.95 | 85.92 | 1.8 | 4200 |
+| 10 | 8000 | 210.5 | 210.65 | 210.55 | 3.5 | 12000 |
+
+Order Data - Sample Records
+| Cpty | Size | Order Type | Algo Type | Start Time | End Time | Order Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| Client_XYZ | 150000 | Market | VWAP | 14:30 | 15:30 | EOD compliance required |
+| Client_ABC | 50000 | Limit | ICEBERG | 10:00 | 14:00 | Minimize market impact |
+| Client_DEF | 200000 | Market | POV | 09:30 | 16:00 | Benchmark: arrival price |
+
+Algo Parameters - Sample Configurations
+| Algo Type | Param 1 | Param 2 | Param 3 | Context | Rationale |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| POV | Target: 15% | Min: 500 | Aggression: Med | Mid-cap, normal vol | Balanced approach |
+| VWAP | Curve: Historical | Max: 20% | Aggression: Low | Large order, liquid | Minimize impact |
+| ICEBERG | Display: 5000 | | Aggression: High | EOD, need completion | Ensure fill |
+
+NOTE: This is illustrative data only. Create your own mock datasets that reflect realistic scenarios and patterns.
