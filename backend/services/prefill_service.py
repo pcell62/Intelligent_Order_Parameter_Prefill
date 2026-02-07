@@ -544,6 +544,7 @@ def compute_prefill(
     quantity: int | None,
     market_data: dict[str, Any],
     urgency_override: int | None = None,
+    risk_aversion_override: int | None = None,
     order_notes_input: str | None = None,
 ) -> dict:
     """
@@ -579,7 +580,7 @@ def compute_prefill(
     client = dict(client_row)
     instrument = dict(instrument_row)
     tag = _client_tag(client.get("notes", ""))
-    risk_aversion = client.get("risk_aversion", 50)
+    risk_aversion = risk_aversion_override if risk_aversion_override is not None else client.get("risk_aversion", 50)
 
     adv = instrument.get("adv", 1_000_000) or 1_000_000
     tick_size = instrument.get("tick_size", 0.05)

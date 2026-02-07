@@ -17,6 +17,7 @@ class PrefillRequest(BaseModel):
     direction: str = "BUY"
     quantity: Optional[int] = None
     urgency: Optional[int] = None          # 0-100, None = auto-compute
+    risk_aversion: Optional[int] = None    # 0-100, None = use client default
     order_notes: Optional[str] = None      # free-text for NLP parsing
 
 
@@ -51,6 +52,7 @@ async def get_prefill(req: PrefillRequest, request: Request):
         quantity=req.quantity,
         market_data=md,
         urgency_override=req.urgency,
+        risk_aversion_override=req.risk_aversion,
         order_notes_input=req.order_notes,
     )
     return result

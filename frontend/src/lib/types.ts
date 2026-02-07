@@ -152,8 +152,9 @@ export interface PrefillRequest {
   symbol: string;
   direction: string;
   quantity?: number;
-  urgency?: number;        // 0-100, undefined = auto-compute
-  order_notes?: string;    // free-text for NLP parsing
+  urgency?: number;           // 0-100, undefined = auto-compute
+  risk_aversion?: number;     // 0-100, undefined = use client default
+  order_notes?: string;       // free-text for NLP parsing
 }
 
 export interface PrefillResponse {

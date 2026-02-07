@@ -120,6 +120,9 @@ export function OrderTicket({
   const [showWhyNot, setShowWhyNot] = useState(false);
   const urgencyDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notesDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Track manual overrides so re-prefill doesn't clobber trader's choices
+  const overriddenFieldsRef = useRef<Set<string>>(new Set());
+  const urgencyManualRef = useRef<number | null>(null);
 
   // Set prefilled symbol when dialog opens
   useEffect(() => {
@@ -131,6 +134,8 @@ export function OrderTicket({
       setErrors([]);
       setPrefill(null);
       setPrefilledFields(new Set());
+      overriddenFieldsRef.current = new Set();
+      urgencyManualRef.current = null;
       setAccounts([]);
       setRiskAversion(50);
       setShowConfirmation(false);
@@ -160,7 +165,7 @@ export function OrderTicket({
 
   // ── Prefill trigger ──
   const triggerPrefill = useCallback(
-    async (clientId: string, symbol: string, direction: string, urgencyVal?: number, orderNotes?: string) => {
+    async (clientId: string, symbol: string, direction: string, urgencyVal?: number, orderNotes?: string, qty?: number, riskAv?: number) => {
       if (!clientId || !symbol) return;
       setPrefilling(true);
       try {
@@ -169,35 +174,40 @@ export function OrderTicket({
           symbol,
           direction,
           urgency: urgencyVal,
+          quantity: qty || undefined,
+          risk_aversion: riskAv,
           order_notes: orderNotes || undefined,
         });
         setPrefill(result);
 
-        // Apply suggestions to form
+        // Apply suggestions to form — skip fields the trader has manually overridden
         const filled = new Set<string>();
+        const ov = overriddenFieldsRef.current;
         setForm((prev) => {
           const next = { ...prev };
           const s = result.suggestions;
 
-          if (s.algo_type) { next.algo_type = s.algo_type as AlgoType; filled.add("algo_type"); }
-          if (s.order_type) { next.order_type = s.order_type as OrderType; filled.add("order_type"); }
-          if (s.limit_price) { next.limit_price = String(s.limit_price); filled.add("limit_price"); }
-          if (s.start_time) { next.start_time = String(s.start_time); filled.add("start_time"); }
-          if (s.end_time) { next.end_time = String(s.end_time); filled.add("end_time"); }
-          if (s.aggression_level) { next.aggression_level = String(s.aggression_level); filled.add("aggression_level"); }
-          if (s.target_participation_rate) { next.target_participation_rate = String(s.target_participation_rate); filled.add("target_participation_rate"); }
-          if (s.min_order_size) { next.min_order_size = String(s.min_order_size); filled.add("min_order_size"); }
-          if (s.max_order_size) { next.max_order_size = String(s.max_order_size); filled.add("max_order_size"); }
-          if (s.volume_curve) { next.volume_curve = String(s.volume_curve); filled.add("volume_curve"); }
-          if (s.max_volume_pct) { next.max_volume_pct = String(s.max_volume_pct); filled.add("max_volume_pct"); }
-          if (s.display_quantity) { next.display_quantity = String(s.display_quantity); filled.add("display_quantity"); }
+          if (s.algo_type && !ov.has("algo_type")) { next.algo_type = s.algo_type as AlgoType; filled.add("algo_type"); }
+          if (s.order_type && !ov.has("order_type")) { next.order_type = s.order_type as OrderType; filled.add("order_type"); }
+          if (s.limit_price && !ov.has("limit_price")) { next.limit_price = String(s.limit_price); filled.add("limit_price"); }
+          if (s.start_time && !ov.has("start_time")) { next.start_time = String(s.start_time); filled.add("start_time"); }
+          if (s.end_time && !ov.has("end_time")) { next.end_time = String(s.end_time); filled.add("end_time"); }
+          if (s.aggression_level && !ov.has("aggression_level")) { next.aggression_level = String(s.aggression_level); filled.add("aggression_level"); }
+          if (s.target_participation_rate && !ov.has("target_participation_rate")) { next.target_participation_rate = String(s.target_participation_rate); filled.add("target_participation_rate"); }
+          if (s.min_order_size && !ov.has("min_order_size")) { next.min_order_size = String(s.min_order_size); filled.add("min_order_size"); }
+          if (s.max_order_size && !ov.has("max_order_size")) { next.max_order_size = String(s.max_order_size); filled.add("max_order_size"); }
+          if (s.volume_curve && !ov.has("volume_curve")) { next.volume_curve = String(s.volume_curve); filled.add("volume_curve"); }
+          if (s.max_volume_pct && !ov.has("max_volume_pct")) { next.max_volume_pct = String(s.max_volume_pct); filled.add("max_volume_pct"); }
+          if (s.display_quantity && !ov.has("display_quantity")) { next.display_quantity = String(s.display_quantity); filled.add("display_quantity"); }
           if (s.quantity && !prev.quantity) { next.quantity = String(s.quantity); filled.add("quantity"); }
           if (s.order_notes && !prev.order_notes) { next.order_notes = String(s.order_notes); filled.add("order_notes"); }
-          if (s.tif) { next.tif = String(s.tif) as TIF; filled.add("tif"); }
-          if (s.get_done !== undefined) { next.get_done = !!s.get_done; filled.add("get_done"); }
+          if (s.tif && !ov.has("tif")) { next.tif = String(s.tif) as TIF; filled.add("tif"); }
+          if (s.get_done !== undefined && !ov.has("get_done")) { next.get_done = !!s.get_done; filled.add("get_done"); }
 
-          // Set urgency from response
-          next.urgency = result.urgency_score;
+          // Set urgency from response (only if trader hasn't manually overridden it)
+          if (urgencyManualRef.current === null) {
+            next.urgency = result.urgency_score;
+          }
 
           return next;
         });
@@ -217,10 +227,13 @@ export function OrderTicket({
     []
   );
 
-  // Fire prefill when client or symbol changes
+  // Fire prefill when client or symbol changes (reset overrides — new context)
   useEffect(() => {
     if (prefillEnabled && form.client_id && form.symbol) {
-      triggerPrefill(form.client_id, form.symbol, form.direction, undefined, form.order_notes);
+      overriddenFieldsRef.current = new Set();
+      urgencyManualRef.current = null;
+      const qty = parseInt(form.quantity) || undefined;
+      triggerPrefill(form.client_id, form.symbol, form.direction, undefined, form.order_notes, qty, riskAversion);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.client_id, form.symbol, prefillEnabled, triggerPrefill]);
@@ -228,7 +241,8 @@ export function OrderTicket({
   // Re-fire prefill when direction changes
   useEffect(() => {
     if (prefillEnabled && form.client_id && form.symbol && prefill) {
-      triggerPrefill(form.client_id, form.symbol, form.direction, undefined, form.order_notes);
+      const qty = parseInt(form.quantity) || undefined;
+      triggerPrefill(form.client_id, form.symbol, form.direction, urgencyManualRef.current ?? undefined, form.order_notes, qty, riskAversion);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.direction]);
@@ -238,27 +252,57 @@ export function OrderTicket({
     if (!prefillEnabled || !form.client_id || !form.symbol) return;
     if (notesDebounce.current) clearTimeout(notesDebounce.current);
     notesDebounce.current = setTimeout(() => {
-      triggerPrefill(form.client_id, form.symbol, form.direction, undefined, form.order_notes);
+      const qty = parseInt(form.quantity) || undefined;
+      triggerPrefill(form.client_id, form.symbol, form.direction, urgencyManualRef.current ?? undefined, form.order_notes, qty, riskAversion);
     }, 800);
     return () => { if (notesDebounce.current) clearTimeout(notesDebounce.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.order_notes]);
+
+  // Re-fire prefill when quantity changes (debounced — user may still be typing)
+  const qtyDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!prefillEnabled || !form.client_id || !form.symbol) return;
+    const qty = parseInt(form.quantity) || 0;
+    if (!qty) return;
+    if (qtyDebounce.current) clearTimeout(qtyDebounce.current);
+    qtyDebounce.current = setTimeout(() => {
+      triggerPrefill(form.client_id, form.symbol, form.direction, urgencyManualRef.current ?? undefined, form.order_notes, qty, riskAversion);
+    }, 600);
+    return () => { if (qtyDebounce.current) clearTimeout(qtyDebounce.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.quantity]);
+
+  // Re-fire prefill when risk aversion slider changes (debounced)
+  const riskDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!prefillEnabled || !form.client_id || !form.symbol || !prefill) return;
+    if (riskDebounce.current) clearTimeout(riskDebounce.current);
+    riskDebounce.current = setTimeout(() => {
+      const qty = parseInt(form.quantity) || undefined;
+      triggerPrefill(form.client_id, form.symbol, form.direction, urgencyManualRef.current ?? undefined, form.order_notes, qty, riskAversion);
+    }, 400);
+    return () => { if (riskDebounce.current) clearTimeout(riskDebounce.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [riskAversion]);
 
   // ── Urgency slider change → debounced re-prefill ──
   const handleUrgencyChange = useCallback(
     (val: number[]) => {
       const u = val[0];
       setForm((f) => ({ ...f, urgency: u }));
+      urgencyManualRef.current = u;   // remember trader override
 
       // Debounce API call
       if (urgencyDebounce.current) clearTimeout(urgencyDebounce.current);
       urgencyDebounce.current = setTimeout(() => {
         if (prefillEnabled && form.client_id && form.symbol) {
-          triggerPrefill(form.client_id, form.symbol, form.direction, u, form.order_notes);
+          const qty = parseInt(form.quantity) || undefined;
+          triggerPrefill(form.client_id, form.symbol, form.direction, u, form.order_notes, qty, riskAversion);
         }
       }, 400);
     },
-    [prefillEnabled, form.client_id, form.symbol, form.direction, form.order_notes, triggerPrefill]
+    [prefillEnabled, form.client_id, form.symbol, form.direction, form.order_notes, riskAversion, triggerPrefill]
   );
 
   // Quick-adjust buttons
@@ -277,6 +321,8 @@ export function OrderTicket({
       if (!enabled) {
         setPrefill(null);
         setPrefilledFields(new Set());
+        overriddenFieldsRef.current = new Set();
+        urgencyManualRef.current = null;
         setForm((prev) => {
           const next = { ...prev };
           if (prefilledFields.has("algo_type")) next.algo_type = DEFAULT_FORM.algo_type;
@@ -301,16 +347,26 @@ export function OrderTicket({
         toast.info("Smart Prefill disabled", { description: "Fields reset to defaults.", duration: 2000 });
       } else {
         if (form.client_id && form.symbol) {
-          triggerPrefill(form.client_id, form.symbol, form.direction, undefined, form.order_notes);
+          const qty = parseInt(form.quantity) || undefined;
+          triggerPrefill(form.client_id, form.symbol, form.direction, undefined, form.order_notes, qty, riskAversion);
         }
       }
     },
-    [prefilledFields, form.client_id, form.symbol, form.direction, form.order_notes, triggerPrefill]
+    [prefilledFields, form.client_id, form.symbol, form.direction, form.order_notes, riskAversion, triggerPrefill]
   );
 
   const update = (field: string, value: string | boolean) => {
     setForm((f) => ({ ...f, [field]: value }));
     setErrors([]);
+    // Remove confidence badge and track override so re-prefill respects trader's choice
+    if (prefilledFields.has(field)) {
+      overriddenFieldsRef.current.add(field);
+      setPrefilledFields((prev) => {
+        const next = new Set(prev);
+        next.delete(field);
+        return next;
+      });
+    }
   };
 
   const symbolMd = useMemo(
@@ -323,10 +379,22 @@ export function OrderTicket({
     [clients, form.client_id]
   );
 
+  const selectedInstrument = useMemo(
+    () => instruments.find((i) => i.symbol === form.symbol),
+    [instruments, form.symbol]
+  );
+
   const notional = useMemo(() => {
     const qty = parseInt(form.quantity) || 0;
     return qty * (symbolMd?.ltp || 0);
   }, [form.quantity, symbolMd]);
+
+  const advPct = useMemo(() => {
+    const qty = parseInt(form.quantity) || 0;
+    const adv = selectedInstrument?.adv || 0;
+    if (!qty || !adv) return null;
+    return (qty / adv) * 100;
+  }, [form.quantity, selectedInstrument]);
 
   // Inline explanation badge
   const PrefillHint = ({ field }: { field: string }) => {
@@ -783,14 +851,26 @@ export function OrderTicket({
                 </div>
               </div>
 
-              {/* Notional estimate */}
+              {/* Notional estimate + ADV % */}
               {notional > 0 && (
-                <div className="flex items-center gap-2 text-sm">
+                <div className="flex items-center gap-2 text-sm flex-wrap">
                   <Info className="h-4 w-4 text-muted-foreground" />
                   <span className="text-muted-foreground">Est. Notional:</span>
                   <span className="font-mono font-semibold">
                     ₹{notional.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
                   </span>
+                  {advPct !== null && (
+                    <>
+                      <span className="text-muted-foreground">·</span>
+                      <span className="text-muted-foreground">ADV:</span>
+                      <span className={`font-mono font-semibold ${advPct > 20 ? "text-rose-400" : advPct > 10 ? "text-amber-400" : "text-emerald-400"}`}>
+                        {advPct.toFixed(1)}%
+                      </span>
+                      {advPct > 20 && (
+                        <Badge variant="outline" className="text-[10px] border-rose-500/50 bg-rose-500/10 text-rose-400">Large block</Badge>
+                      )}
+                    </>
+                  )}
                   {selectedClient && notional > selectedClient.credit_limit && (
                     <Badge variant="destructive" className="text-xs">Exceeds credit limit</Badge>
                   )}
