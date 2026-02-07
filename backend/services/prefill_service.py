@@ -186,60 +186,99 @@ def _compute_urgency_score(
     volatility: float,
     notes_intent: dict,
     risk_aversion: int,
-) -> int:
+) -> tuple[int, list[dict]]:
     """
     Compute an urgency score from 0 (patient) to 100 (urgent).
     This is the "turn the knob" base value.
+
+    Returns (score, breakdown) where breakdown is a list of
+    {"factor": str, "detail": str, "delta": int} dicts.
     """
-    score = RC.get_int("urgency.baseline", 50)
+    baseline = RC.get_int("urgency.baseline", 50)
+    score = baseline
+    breakdown: list[dict] = [{"factor": "Baseline", "detail": "Starting value", "delta": baseline}]
 
     # ── Time pressure ──
+    time_delta = 0
+    time_detail = f"{time_to_close} min to close"
     if time_to_close < RC.get_int("urgency.time_close_critical_min", 10):
-        score += RC.get_int("urgency.time_close_critical_delta", 35)
+        time_delta = RC.get_int("urgency.time_close_critical_delta", 35)
+        time_detail = f"{time_to_close} min to close (critical)"
     elif time_to_close < RC.get_int("urgency.time_close_tight_min", 20):
-        score += RC.get_int("urgency.time_close_tight_delta", 25)
+        time_delta = RC.get_int("urgency.time_close_tight_delta", 25)
+        time_detail = f"{time_to_close} min to close (tight)"
     elif time_to_close < RC.get_int("urgency.time_close_approaching_min", 30):
-        score += RC.get_int("urgency.time_close_approaching_delta", 18)
+        time_delta = RC.get_int("urgency.time_close_approaching_delta", 18)
+        time_detail = f"{time_to_close} min to close (approaching)"
     elif time_to_close < RC.get_int("urgency.time_close_mild_min", 60):
-        score += RC.get_int("urgency.time_close_mild_delta", 10)
+        time_delta = RC.get_int("urgency.time_close_mild_delta", 10)
+        time_detail = f"{time_to_close} min to close (mild pressure)"
     elif time_to_close > RC.get_int("urgency.time_open_plenty_min", 240):
-        score += RC.get_int("urgency.time_open_plenty_delta", -10)
+        time_delta = RC.get_int("urgency.time_open_plenty_delta", -10)
+        time_detail = f"{time_to_close} min to close (plenty of time)"
+    if time_delta != 0:
+        score += time_delta
+        breakdown.append({"factor": "Time Pressure", "detail": time_detail, "delta": time_delta})
 
     # ── Client profile ──
+    tag_delta = 0
     if tag == "eod_compliance":
-        score += RC.get_int("urgency.tag_eod_compliance", 12)
+        tag_delta = RC.get_int("urgency.tag_eod_compliance", 12)
     elif tag == "hft":
-        score += RC.get_int("urgency.tag_hft", 18)
+        tag_delta = RC.get_int("urgency.tag_hft", 18)
     elif tag == "stealth":
-        score += RC.get_int("urgency.tag_stealth", -12)
+        tag_delta = RC.get_int("urgency.tag_stealth", -12)
     elif tag == "conservative":
-        score += RC.get_int("urgency.tag_conservative", -15)
+        tag_delta = RC.get_int("urgency.tag_conservative", -15)
     elif tag == "arrival_price":
-        score += RC.get_int("urgency.tag_arrival_price", 5)
+        tag_delta = RC.get_int("urgency.tag_arrival_price", 5)
+    if tag_delta != 0:
+        score += tag_delta
+        breakdown.append({"factor": "Client Profile", "detail": f"Tag: {tag}", "delta": tag_delta})
 
     # ── Order size ── (larger orders need patience)
+    size_delta = 0
+    size_detail = f"{size_pct_adv:.1f}% of ADV"
     if size_pct_adv > 20:
-        score += RC.get_int("urgency.size_above_20pct_delta", -12)
+        size_delta = RC.get_int("urgency.size_above_20pct_delta", -12)
+        size_detail = f"{size_pct_adv:.1f}% of ADV (very large)"
     elif size_pct_adv > 10:
-        score += RC.get_int("urgency.size_above_10pct_delta", -5)
+        size_delta = RC.get_int("urgency.size_above_10pct_delta", -5)
+        size_detail = f"{size_pct_adv:.1f}% of ADV (large)"
     elif size_pct_adv < 2:
-        score += RC.get_int("urgency.size_below_2pct_delta", 10)
+        size_delta = RC.get_int("urgency.size_below_2pct_delta", 10)
+        size_detail = f"{size_pct_adv:.1f}% of ADV (small)"
     elif size_pct_adv < 5:
-        score += RC.get_int("urgency.size_below_5pct_delta", 5)
+        size_delta = RC.get_int("urgency.size_below_5pct_delta", 5)
+        size_detail = f"{size_pct_adv:.1f}% of ADV (moderate)"
+    if size_delta != 0:
+        score += size_delta
+        breakdown.append({"factor": "Order Size", "detail": size_detail, "delta": size_delta})
 
     # ── Volatility ── (high vol → more careful)
+    vol_delta = 0
     if volatility > RC.get_float("urgency.vol_high_threshold", 3.0):
-        score += RC.get_int("urgency.vol_high_delta", -8)
+        vol_delta = RC.get_int("urgency.vol_high_delta", -8)
+        score += vol_delta
+        breakdown.append({"factor": "Volatility", "detail": f"{volatility:.2f}% (high)", "delta": vol_delta})
     elif volatility < RC.get_float("urgency.vol_low_threshold", 1.5):
-        score += RC.get_int("urgency.vol_low_delta", 5)
+        vol_delta = RC.get_int("urgency.vol_low_delta", 5)
+        score += vol_delta
+        breakdown.append({"factor": "Volatility", "detail": f"{volatility:.2f}% (low)", "delta": vol_delta})
 
     # ── Notes intent ──
     if notes_intent.get("urgency_hint") == "high":
-        score += RC.get_int("urgency.notes_high_delta", 20)
+        d = RC.get_int("urgency.notes_high_delta", 20)
+        score += d
+        breakdown.append({"factor": "Order Notes", "detail": "Urgent language detected", "delta": d})
     elif notes_intent.get("urgency_hint") == "low":
-        score += RC.get_int("urgency.notes_low_delta", -15)
+        d = RC.get_int("urgency.notes_low_delta", -15)
+        score += d
+        breakdown.append({"factor": "Order Notes", "detail": "Patient language detected", "delta": d})
     if notes_intent.get("get_done"):
-        score += RC.get_int("urgency.notes_get_done_delta", 12)
+        d = RC.get_int("urgency.notes_get_done_delta", 12)
+        score += d
+        breakdown.append({"factor": "Get Done Flag", "detail": "Must-fill intent in notes", "delta": d})
     if notes_intent.get("deadline"):
         # If deadline is soon, add urgency
         try:
@@ -249,18 +288,30 @@ def _compute_urgency_score(
             now_min = now.hour * 60 + now.minute
             mins_until = dl_min - now_min
             if 0 < mins_until < RC.get_int("urgency.deadline_imminent_min", 30):
-                score += RC.get_int("urgency.deadline_imminent_delta", 20)
+                d = RC.get_int("urgency.deadline_imminent_delta", 20)
+                score += d
+                breakdown.append({"factor": "Deadline", "detail": f"{mins_until} min away (imminent)", "delta": d})
             elif 0 < mins_until < RC.get_int("urgency.deadline_approaching_min", 60):
-                score += RC.get_int("urgency.deadline_approaching_delta", 10)
+                d = RC.get_int("urgency.deadline_approaching_delta", 10)
+                score += d
+                breakdown.append({"factor": "Deadline", "detail": f"{mins_until} min away (approaching)", "delta": d})
         except (ValueError, IndexError):
             pass
 
     # ── Risk aversion (light influence) ──
     # 0=aggressive → push up, 100=conservative → push down
-    risk_delta = (50 - risk_aversion) * RC.get_float("urgency.risk_aversion_factor", 0.15)
-    score += int(risk_delta)
+    risk_delta = int((50 - risk_aversion) * RC.get_float("urgency.risk_aversion_factor", 0.15))
+    if risk_delta != 0:
+        score += risk_delta
+        label = "aggressive" if risk_delta > 0 else "conservative"
+        breakdown.append({"factor": "Risk Aversion", "detail": f"Risk aversion {risk_aversion}/100 ({label})", "delta": risk_delta})
 
-    return max(0, min(100, int(score)))
+    final = max(0, min(100, int(score)))
+    raw_total = sum(b["delta"] for b in breakdown)
+    if final != raw_total:
+        breakdown.append({"factor": "Clamped", "detail": "Score clamped to 0-100 range", "delta": final - raw_total})
+
+    return final, breakdown
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -573,6 +624,7 @@ def compute_prefill(
         return {
             "suggestions": {}, "explanations": {}, "confidence": {},
             "urgency_score": 50, "computed_urgency": 50,
+            "urgency_breakdown": [{"factor": "Baseline", "detail": "Starting value", "delta": 50}],
             "scenario_tag": "standard", "scenario_label": "Standard Execution",
             "why_not": {},
         }
@@ -613,7 +665,7 @@ def compute_prefill(
     cross = _get_cross_client_patterns(symbol, qty)
 
     # ── Compute urgency ──
-    computed_urgency = _compute_urgency_score(
+    computed_urgency, urgency_breakdown = _compute_urgency_score(
         time_to_close, tag, size_pct_adv, volatility, notes_intent, risk_aversion
     )
     urgency = urgency_override if urgency_override is not None else computed_urgency
@@ -1173,6 +1225,7 @@ def compute_prefill(
         "confidence": confidence,
         "urgency_score": urgency,
         "computed_urgency": computed_urgency,
+        "urgency_breakdown": urgency_breakdown,
         "scenario_tag": scenario_tag,
         "scenario_label": scenario_label,
         "why_not": why_not,

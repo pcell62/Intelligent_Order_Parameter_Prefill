@@ -612,8 +612,51 @@ export function OrderTicket({
                       <ChevronLeft className="h-3 w-3 mr-0.5" /> More Passive
                     </Button>
                   </div>
-                  <span className={`text-xs font-bold ${uZone.color}`}>
+                  <span className={`text-xs font-bold ${uZone.color} inline-flex items-center gap-1`}>
                     {uZone.label}
+                    {prefill && (
+                      <TooltipProvider>
+                        <Tooltip delayDuration={150}>
+                          <TooltipTrigger asChild>
+                            <button type="button" className="inline-flex items-center justify-center rounded-full focus:outline-none">
+                              <Info className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground cursor-help transition-colors" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs p-0 bg-popover text-popover-foreground border border-border shadow-lg rounded-lg">
+                            <div className="px-3 py-2 border-b border-border">
+                              <p className="text-[11px] font-semibold">Urgency Score Breakdown</p>
+                            </div>
+                            {prefill.urgency_breakdown && prefill.urgency_breakdown.length > 0 ? (
+                              <>
+                                <div className="px-3 py-2 space-y-1.5">
+                                  {prefill.urgency_breakdown.map((item, i) => (
+                                    <div key={i} className="flex items-center justify-between gap-4 text-[11px]">
+                                      <div className="flex flex-col min-w-0">
+                                        <span className="font-medium truncate">{item.factor}</span>
+                                        <span className="text-[10px] text-muted-foreground truncate">{item.detail}</span>
+                                      </div>
+                                      <span className={`font-mono font-semibold shrink-0 ${
+                                        item.delta > 0 ? "text-rose-400" : item.delta < 0 ? "text-emerald-400" : "text-muted-foreground"
+                                      }`}>
+                                        {item.delta > 0 ? "+" : ""}{item.delta}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                                <div className="px-3 py-1.5 border-t border-border flex justify-between text-[11px] font-semibold">
+                                  <span>Final Score</span>
+                                  <span className={uZone.color}>{prefill.computed_urgency}/100</span>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="px-3 py-2 text-[11px] text-muted-foreground">
+                                Urgency is computed from time pressure, client profile, order size, volatility, order notes, and risk aversion.
+                              </div>
+                            )}
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    )}
                   </span>
                   <div className="flex items-center gap-2">
                     <Button

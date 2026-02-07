@@ -157,12 +157,19 @@ export interface PrefillRequest {
   order_notes?: string;       // free-text for NLP parsing
 }
 
+export interface UrgencyBreakdownItem {
+  factor: string;
+  detail: string;
+  delta: number;
+}
+
 export interface PrefillResponse {
   suggestions: Record<string, string | boolean>;
   explanations: Record<string, string>;
   confidence: Record<string, number>;
   urgency_score: number;
   computed_urgency: number;
+  urgency_breakdown: UrgencyBreakdownItem[];
   scenario_tag: string;
   scenario_label: string;
   why_not: Record<string, string>;

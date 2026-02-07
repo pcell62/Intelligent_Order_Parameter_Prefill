@@ -2,7 +2,7 @@
 Prefill Router — exposes the prefill service as an API endpoint.
 """
 
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel
 from fastapi import APIRouter, Request, HTTPException
 
@@ -21,12 +21,19 @@ class PrefillRequest(BaseModel):
     order_notes: Optional[str] = None      # free-text for NLP parsing
 
 
+class UrgencyBreakdownItem(BaseModel):
+    factor: str
+    detail: str
+    delta: int
+
+
 class PrefillResponse(BaseModel):
     suggestions: dict
     explanations: dict
     confidence: dict
     urgency_score: int
     computed_urgency: int
+    urgency_breakdown: List[UrgencyBreakdownItem]
     scenario_tag: str
     scenario_label: str
     why_not: dict
